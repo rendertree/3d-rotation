@@ -16,19 +16,74 @@
 //   3. This notice may not be removed or altered from any source distribution.
 
 #include "raylib.h"
+#include "matrix.hpp"
 #include "rlgl.h"
 #include "raymath.h"
+#include <string>
+
+using namespace std;
 
 #define RAYGUI_IMPLEMENTATION
 #include "extras/raygui.h"
 
 #define RLIGHTS_IMPLEMENTATION
-#include "rlights.h"
+#include "rlights.hpp"
 
 #define GLSL_VERSION 330
 
-void DrawModelPro(Model model, Vector3 pos, Quaternion rot, float scale, Color color, bool wires, const char* mode);
-void UpdateLightPos(Light* light, float speed, float radius);
+static void DrawModelPro(
+    const Model& model, 
+    Vector3 position, 
+    Quaternion rotation, 
+    float scale, 
+    Color color, 
+    bool drawFacesAndTexture, 
+    string mode)
+{
+    scale = scale * 0.1f; // Personal custom
+
+    Matrix rotationMatrix = {};
+    if (mode == "ZYX Euler")
+    {
+        rotationMatrix = MatrixRotateZYX(QuaternionToEuler(QuaternionNormalize(rotation)));
+    }
+    else if (mode == "Quaternion")
+    {
+        rotationMatrix = QuaternionToMatrix(QuaternionNormalize(rotation));
+    }
+    else if (mode == "Axis Angle")
+    {
+        Vector3 vec = {};
+        float angle = {};
+        QuaternionToAxisAngle(rotation, &vec, &angle);
+        rotationMatrix = QuaternionToMatrix(QuaternionFromAxisAngle(vec, angle));
+    }
+
+    Matrix transformMatrix = MatrixTranslate(position.x, position.y, position.z) * rotationMatrix * MatrixScale(scale, scale, scale);
+
+    // Push the current matrix and multiply it with the transformation matrix
+    rlPushMatrix();
+    rlMultMatrixf(MatrixToFloat(transformMatrix));
+
+    if (drawFacesAndTexture) DrawModel(model, Vector3Zero(), scale, WHITE);
+    else DrawModelWires(model, Vector3Zero(), scale, WHITE);
+
+    // Pop the matrix back to the previous state
+    rlPopMatrix();
+}
+
+static inline void UpdateLightPos(Light& light, float speed, float radius)
+{
+    // Update time within the function
+    static float time = 0.0f;
+    time += GetFrameTime();
+
+    // Calculate the new position based on time
+    float dx = radius * cos(speed * time);
+    float dz = radius * sin(speed * time);
+
+    light.position = (Vector3){ dx, light.position.y, dz };
+}
 
 int main(void)
 {
@@ -47,9 +102,9 @@ int main(void)
 
     SetTargetFPS(120);
 
-    Vector3     boxPos       = { 0.0f, 0.0f, 0.0f };
-    Quaternion  boxRotation  = { 0.0f, 0.0f, 0.0f, 0.0f };
-    float       boxScale     = 1.0f;
+    Vector3 boxPos          = { 0.0f, 0.0f, 0.0f };
+    Quaternion boxRotation  = { 0.0f, 0.0f, 0.0f, 0.0f };
+    float   boxScale        = 1.0f;
 
     Model boxModel = LoadModel("resources/models/box/wooden_box.obj");
     
@@ -67,17 +122,17 @@ int main(void)
     boxModel.materials->shader = shader;
 
     // Create light
-    Light light = { 0 };
+    Light light = {};
     light = CreateLight(LIGHT_POINT, (Vector3){ 4.0f, 4.0f, -2.0f }, Vector3Zero(), RAYWHITE, shader);
 
     float lightSpeed = 2.0f;
 
-    bool wires = true;
+    bool drawFacesAndTexture = false;
 
     int selectedMode = 0; // Default selected mode index
 
     // Items for the dropdown
-    const char* strRotationMode[3] = { "ZYX Euler", "Quaternion", "Axis Angle" };
+    string strRotationMode[3] = { "ZYX Euler", "Quaternion", "Axis Angle" };
 
     bool dropdownActive = false;
 
@@ -90,7 +145,7 @@ int main(void)
 
         if (IsKeyPressed('Z')) camera.target = (Vector3){ 0.0f, 0.5f, 0.0f };
 
-        UpdateLightPos(&light, lightSpeed, 6.0f);
+        UpdateLightPos(light, lightSpeed, 6.0f);
         UpdateLightValues(shader, light);
         
         BeginDrawing();
@@ -101,7 +156,7 @@ int main(void)
             // Draw spheres to show where the lights are
             DrawSphereEx(light.position, 0.2f, 8, 8, light.color);
   
-            DrawModelPro(boxModel, boxPos, boxRotation, boxScale, BLUE, wires, strRotationMode[selectedMode]);
+            DrawModelPro(boxModel, boxPos, boxRotation, boxScale, BLUE, drawFacesAndTexture, strRotationMode[selectedMode]);
 
             DrawGrid(10, 1.0f);
         EndMode3D();
@@ -110,7 +165,7 @@ int main(void)
 
         float uiSettingsLeft = screenWidth - 150;
         GuiGroupBox((Rectangle){ uiSettingsLeft - 10, 20, 150, 310 }, "Settings");
-        wires = GuiCheckBox((Rectangle){ uiSettingsLeft, 40, 15, 15 }, "Wires", wires);
+        drawFacesAndTexture = GuiCheckBox((Rectangle){ uiSettingsLeft, 40, 15, 15 }, "Draw Faces & Texture", drawFacesAndTexture);
         
         DrawText("Rotation Mode", 20, 40, 19, RAYWHITE);
         if (GuiDropdownBox(((Rectangle){ 20, 60, 140, 30 }), "ZYX Euler;Quaternion;Axis Angle", &selectedMode, dropdownActive))
@@ -258,8 +313,8 @@ int main(void)
 
         if (GuiButton((Rectangle){ uiSettingsLeft, 300, 50, 20}, "RESET"))
         {
-            boxPos            = (Vector3){ 0.0f, 0.0f, 0.0f };
-            boxRotation       = (Quaternion){ 0.0f, 0.0f, 0.0f, 0.0f };
+            boxPos            = { 0.0f, 0.0f, 0.0f };
+            boxRotation       = { 0.0f, 0.0f, 0.0f, 0.0f };
             boxScale          = 1.0f;
             lightSpeed        = 2.0f;
             light.position.y  = 4.0f;
@@ -274,51 +329,4 @@ int main(void)
     CloseWindow();
 
     return 0;
-}
-
-void DrawModelPro(Model model, Vector3 pos, Quaternion rot, float scale, Color color, bool wires, const char* mode)
-{
-    scale = scale * 0.1f; // Personal custom
-
-    Matrix rotMatrix = { 0 };
-    if (mode == "ZYX Euler")
-    {
-        rotMatrix = MatrixRotateZYX(QuaternionToEuler(QuaternionNormalize(rot)));
-    }
-    else if (mode == "Quaternion")
-    {
-        rotMatrix = QuaternionToMatrix(QuaternionNormalize(rot));
-    }
-    else if (mode == "Axis Angle")
-    {
-        float angle = 0.0f;
-        Vector3 vec = { 0 };
-        QuaternionToAxisAngle(rot, &vec, &angle);
-        rotMatrix = QuaternionToMatrix(QuaternionFromAxisAngle(vec, angle));
-    }
-
-    Matrix transformMatrix = MatrixMultiply(MatrixMultiply(MatrixTranslate(pos.x, pos.y, pos.z), rotMatrix), MatrixScale(scale, scale, scale));
-
-    // Push the current matrix and multiply it with the transformation matrix
-    rlPushMatrix();
-    rlMultMatrixf(MatrixToFloat(transformMatrix));
-
-    if (wires) DrawModelWires(model, Vector3Zero(), scale, WHITE);
-    else DrawModel(model, Vector3Zero(), scale, WHITE); 
-
-    // Pop the matrix back to the previous state
-    rlPopMatrix();
-}
-
-void UpdateLightPos(Light* light, float speed, float radius)
-{
-    // Update time within the function
-    static float time = 0.0f;
-    time += GetFrameTime();
-
-    // Calculate the new position based on time
-    float dx = radius * cos(speed * time);
-    float dz = radius * sin(speed * time);
-
-    light->position = (Vector3){ dx, light->position.y, dz };
 }
